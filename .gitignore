@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+package-lock.json
+yarn.lock
+
+# 编译输出
+dist/
+build/
+
+# 环境变量（包含私钥，绝不提交）
+.env
+.env.local
+
+# 日志文件
+logs/
+*.log
+
+# 测试覆盖率
+coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# MacOS
+.DS_Store
+
+# 临时文件
+*.tmp
+.cache/

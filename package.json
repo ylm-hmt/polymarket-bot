@@ -1,7 +1,7 @@
 {
-  "name": "polymarket-bot",
+  "name": "PolyMarket-bot",
   "version": "1.0.0",
-  "description": "Polymarket 自动化套利交易机器人",
+  "description": "PolyMarket 自动化套利交易机器人",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -12,7 +12,7 @@
     "test:integration": "jest --testPathPattern=integration"
   },
   "keywords": [
-    "polymarket",
+    "PolyMarket",
     "trading",
     "bot",
     "crypto"

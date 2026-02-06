@@ -14,7 +14,7 @@
 
 ```bash
 # 克隆项目
-c-bot
+git clone https://github.com/ylm-hmt/polymarket-bot.git
 
 # 安装依赖
 npm install

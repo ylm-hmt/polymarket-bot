@@ -3,33 +3,33 @@
  */
 
 export enum ArbitrageStrategy {
-  PRICE_IMBALANCE = 'PRICE_IMBALANCE',     // 价格不平衡套利
-  CROSS_MARKET = 'CROSS_MARKET',           // 跨市场套利
-  TIME_BASED = 'TIME_BASED'                // 时间套利
+  PRICE_IMBALANCE = "PRICE_IMBALANCE", // 价格不平衡套利
+  CROSS_MARKET = "CROSS_MARKET", // 跨市场套利
+  TIME_BASED = "TIME_BASED", // 时间套利
 }
 
 export enum MonitorMode {
-  ALL = 'ALL',                             // 监控所有市场
-  CATEGORY = 'CATEGORY',                   // 监控指定类别
-  CUSTOM = 'CUSTOM'                        // 自定义市场列表
+  ALL = "ALL", // 监控所有市场
+  CATEGORY = "CATEGORY", // 监控指定类别
+  CUSTOM = "CUSTOM", // 自定义市场列表
 }
 
 export enum OrderSide {
-  BUY = 'BUY',
-  SELL = 'SELL'
+  BUY = "BUY",
+  SELL = "SELL",
 }
 
 export enum OrderType {
-  MARKET = 'MARKET',
-  LIMIT = 'LIMIT'
+  MARKET = "MARKET",
+  LIMIT = "LIMIT",
 }
 
 export enum OrderStatus {
-  PENDING = 'PENDING',
-  FILLED = 'FILLED',
-  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
-  CANCELLED = 'CANCELLED',
-  FAILED = 'FAILED'
+  PENDING = "PENDING",
+  FILLED = "FILLED",
+  PARTIALLY_FILLED = "PARTIALLY_FILLED",
+  CANCELLED = "CANCELLED",
+  FAILED = "FAILED",
 }
 
 /**
@@ -38,37 +38,41 @@ export enum OrderStatus {
 export interface BotConfig {
   // 钱包配置
   privateKey: string;
-  
+
   // API 配置
   clobApiUrl: string;
   clobWsUrl: string;
-  
+
   // 交易参数
   minProfitThreshold: number;
   maxPositionSize: number;
   minPositionSize: number;
   maxSlippage: number;
   dailyMaxLoss: number;
-  
+
   // 策略配置
   enabledStrategies: ArbitrageStrategy[];
-  
+
   // 监控配置
   monitorMode: MonitorMode;
   monitorCategories: string[];
   customMarketIds: string[];
   minLiquidity: number;
-  
+  maxMarkets: number;
+  maxPages: number;
+  marketsPerPage: number;
+
   // 风险管理
   enableRiskManagement: boolean;
   maxConcurrentPositions: number;
   orderTimeout: number;
-  
+
   // 系统配置
   logLevel: string;
   enableDashboard: boolean;
   wsReconnectInterval: number;
   apiTimeout: number;
+  apiMaxRetries: number;
 }
 
 /**
@@ -127,9 +131,9 @@ export interface ArbitrageOpportunity {
 }
 
 export enum RiskLevel {
-  LOW = 'LOW',
-  MEDIUM = 'MEDIUM',
-  HIGH = 'HIGH'
+  LOW = "LOW",
+  MEDIUM = "MEDIUM",
+  HIGH = "HIGH",
 }
 
 /**

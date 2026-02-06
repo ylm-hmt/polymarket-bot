@@ -35,6 +35,7 @@ class ArbitrageBot {
   private isRunning: boolean = false;
   private markets: Market[] = [];
   private scanInterval: NodeJS.Timeout | null = null;
+  private processQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.logger = Logger.getInstance();
@@ -92,7 +93,9 @@ class ArbitrageBot {
       this.logger.info("正在进行交易认证...");
       const authSuccess = await this.orderExecutor.authenticateForTrading();
       if (!authSuccess) {
-        this.logger.warn("交易认证失败，机器人将以只读模式运行（仅监控，不交易）");
+        this.logger.warn(
+          "交易认证失败，机器人将以只读模式运行（仅监控，不交易）",
+        );
         if (this.dashboard) {
           this.dashboard.log("认证失败，只读模式", "warn");
         }
@@ -215,19 +218,21 @@ class ArbitrageBot {
         // 重置每日统计
         this.riskManager.resetDailyStats();
 
-        // 扫描套利机会
+        // 扫描套利机会并立即执行
         const opportunities = await this.arbitrageDetector.scanOpportunities(
           this.markets,
+          async opportunity => {
+            // 使用队列确保串行执行交易，防止资金竞争
+            this.processQueue = this.processQueue.then(async () => {
+              await this.processOpportunity(opportunity);
+            });
+            await this.processQueue;
+          },
         );
 
         if (this.dashboard) {
           this.dashboard.updateOpportunities(opportunities);
           this.dashboard.updateStats(this.riskManager.getStats());
-        }
-
-        // 处理机会
-        for (const opportunity of opportunities) {
-          await this.processOpportunity(opportunity);
         }
 
         // 清理过期机会

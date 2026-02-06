@@ -76,47 +76,64 @@ export class MarketDataService {
         `正在获取活跃市场${category ? ` (类别: ${category})` : ""}...`,
       );
 
-      let url = `${this.gammaApiUrl}/markets?active=true&closed=false&limit=300`;
-      if (category) {
-        url += `&tag=${category}`;
-      }
+      const maxPages = this.config.getConfig().maxPages;
+      const marketsPerPage = this.config.getConfig().marketsPerPage;
+      let allRawMarkets: any[] = [];
 
-      let retries = 3;
-      let delay = 1000;
-      let data: any = null;
-
-      while (retries > 0) {
-        let controller: AbortController | null = null;
-        let timeoutId: NodeJS.Timeout | null = null;
-        try {
-          controller = new AbortController();
-          timeoutId = setTimeout(() => controller?.abort(), 10000);
-
-          const response = await fetch(url, { signal: controller.signal });
-
-          if (timeoutId) clearTimeout(timeoutId);
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-
-          data = await response.json();
-          break;
-        } catch (error) {
-          if (timeoutId) clearTimeout(timeoutId);
-          retries--;
-          if (retries === 0) throw error;
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay *= 1.5;
+      for (let page = 0; page < maxPages; page++) {
+        const offset = page * marketsPerPage;
+        let url = `${this.gammaApiUrl}/markets?active=true&closed=false&limit=${marketsPerPage}&offset=${offset}`;
+        if (category) {
+          url += `&tag=${category}`;
         }
+
+        let retries = this.config.getConfig().apiMaxRetries;
+        let delay = 1000;
+        let data: any = null;
+
+        while (retries > 0) {
+          let controller: AbortController | null = null;
+          let timeoutId: NodeJS.Timeout | null = null;
+          try {
+            controller = new AbortController();
+            timeoutId = setTimeout(() => controller?.abort(), 10000);
+
+            const response = await fetch(url, { signal: controller.signal });
+
+            if (timeoutId) clearTimeout(timeoutId);
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            data = await response.json();
+            break;
+          } catch (error) {
+            if (timeoutId) clearTimeout(timeoutId);
+            retries--;
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 1.5;
+          }
+        }
+
+        const markets = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.markets)
+            ? data.markets
+            : [];
+
+        if (markets.length === 0) break;
+        allRawMarkets = allRawMarkets.concat(markets);
+
+        // 如果返回数量少于 limit，说明没有更多数据了
+        if (markets.length < marketsPerPage) break;
+
+        // 避免 API 速率限制
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      const rawMarkets: any[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.markets)
-          ? data.markets
-          : [];
-
+      const rawMarkets = allRawMarkets;
       let missingClobTokenIds = 0;
 
       const allMarkets: Market[] = rawMarkets.map((m: any) => {
@@ -152,7 +169,7 @@ export class MarketDataService {
         };
       });
 
-      const MAX_MARKETS = 300;
+      const MAX_MARKETS = this.config.getConfig().maxMarkets;
       const selected = allMarkets
         .sort((a, b) => {
           const la = Math.max(...a.tokens.map(t => t.liquidity || 0), 0);
@@ -161,7 +178,9 @@ export class MarketDataService {
         })
         .slice(0, MAX_MARKETS);
 
-      this.logger.info(`获取到 ${selected.length} 个活跃市场`);
+      this.logger.info(
+        `获取到 ${selected.length} 个活跃市场${category ? ` (类别: ${category})` : ""}`,
+      );
       if (missingClobTokenIds > 0) {
         this.logger.warn(
           `市场数据缺少 clobTokenIds: ${missingClobTokenIds}/${rawMarkets.length}（将导致无法读取订单簿）`,
@@ -195,9 +214,9 @@ export class MarketDataService {
       const pricesRaw = this.normalizeStringArray(m.outcomePrices);
       const clobTokenIds = this.normalizeStringArray(m.clobTokenIds);
 
-      const normalizedOutcomes =
-        outcomes.length > 0 ? outcomes : ["Yes", "No"];
-      const normalizedPrices = pricesRaw.length > 0 ? pricesRaw : ["0.5", "0.5"];
+      const normalizedOutcomes = outcomes.length > 0 ? outcomes : ["Yes", "No"];
+      const normalizedPrices =
+        pricesRaw.length > 0 ? pricesRaw : ["0.5", "0.5"];
       return {
         id: m.condition_id || m.conditionId || m.id,
         question: m.question,

@@ -18,10 +18,13 @@ export class ArbitrageDetector {
   private logger: Logger;
   private opportunities: ArbitrageOpportunity[] = [];
   private priceHistory: PriceHistory;
-  
+  private onOpportunityFoundCallback?: (
+    op: ArbitrageOpportunity,
+  ) => Promise<void>;
+
   // Polymarket 交易费用率 (~1% per side, 2% round-trip)
   private readonly TRADING_FEE_RATE = 0.01;
-  
+
   private lastScanStats: {
     totalMarkets: number;
     binaryMarkets: number;
@@ -52,8 +55,11 @@ export class ArbitrageDetector {
    */
   public async scanOpportunities(
     markets: Market[],
+    onOpportunityFound?: (op: ArbitrageOpportunity) => Promise<void>,
   ): Promise<ArbitrageOpportunity[]> {
     this.opportunities = [];
+    this.onOpportunityFoundCallback = onOpportunityFound;
+
     this.lastScanStats = {
       totalMarkets: markets.length,
       binaryMarkets: 0,
@@ -68,40 +74,44 @@ export class ArbitrageDetector {
     const total = markets.length;
     const logEvery = 100;
 
-    for (let i = 0; i < markets.length; i += BATCH_SIZE) {
-      const batch = markets.slice(i, i + BATCH_SIZE);
+    try {
+      for (let i = 0; i < markets.length; i += BATCH_SIZE) {
+        const batch = markets.slice(i, i + BATCH_SIZE);
 
-      if (processed % logEvery === 0) {
-        this.logger.info(
-          `正在扫描市场 ${processed + 1}-${Math.min(processed + logEvery, total)} / ${total}...`,
-        );
-      }
+        if (processed % logEvery === 0) {
+          this.logger.info(
+            `正在扫描市场 ${processed + 1}-${Math.min(processed + logEvery, total)} / ${total}...`,
+          );
+        }
 
-      await Promise.all(
-        batch.map(async market => {
-          // 只检查有两个结果的市场（YES/NO）
-          if (market.tokens.length !== 2) return;
-          this.lastScanStats.binaryMarkets++;
+        await Promise.all(
+          batch.map(async market => {
+            // 只检查有两个结果的市场（YES/NO）
+            if (market.tokens.length !== 2) return;
+            this.lastScanStats.binaryMarkets++;
 
-          for (const strategy of this.enabledStrategies) {
-            switch (strategy) {
-              case ArbitrageStrategy.PRICE_IMBALANCE:
-                await this.detectPriceImbalance(market);
-                break;
-              case ArbitrageStrategy.CROSS_MARKET:
-                await this.detectCrossMarket(market, markets);
-                break;
-              case ArbitrageStrategy.TIME_BASED:
-                await this.detectTimeBased(market);
-                break;
+            for (const strategy of this.enabledStrategies) {
+              switch (strategy) {
+                case ArbitrageStrategy.PRICE_IMBALANCE:
+                  await this.detectPriceImbalance(market);
+                  break;
+                case ArbitrageStrategy.CROSS_MARKET:
+                  await this.detectCrossMarket(market, markets);
+                  break;
+                case ArbitrageStrategy.TIME_BASED:
+                  await this.detectTimeBased(market);
+                  break;
+              }
             }
-          }
-        }),
-      );
+          }),
+        );
 
-      processed += batch.length;
+        processed += batch.length;
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    } finally {
+      this.onOpportunityFoundCallback = undefined;
     }
 
     this.logger.info(`扫描完成，发现 ${this.opportunities.length} 个潜在机会`);
@@ -183,7 +193,7 @@ export class ArbitrageDetector {
         const profitPercentage = (netProfit / buyCost) * 100;
 
         if (profitPercentage >= this.minProfitThreshold && netProfit > 0) {
-          this.addOpportunity({
+          await this.addOpportunity({
             id: `${market.id}_imbalance_buy_${Date.now()}`,
             strategy: ArbitrageStrategy.PRICE_IMBALANCE,
             marketId: market.id,
@@ -221,7 +231,7 @@ export class ArbitrageDetector {
         const profit = 1.0 - midCost;
         const profitPercentage = (profit / midCost) * 100;
         if (profitPercentage >= this.minProfitThreshold) {
-          this.addOpportunity({
+          await this.addOpportunity({
             id: `${market.id}_imbalance_signal_${Date.now()}`,
             strategy: ArbitrageStrategy.PRICE_IMBALANCE,
             marketId: market.id,
@@ -243,7 +253,7 @@ export class ArbitrageDetector {
   /**
    * 策略2: 跨市场套利
    * 寻找相关市场间的价格差异（逻辑不一致）
-   * 
+   *
    * 类型1: 嵌套市场 - "X > 50k" vs "X > 60k" (后者概率不应高于前者)
    * 类型2: 相关事件 - 同类别中相似问题但价格差异大
    */
@@ -259,20 +269,29 @@ export class ArbitrageDetector {
       // 寻找逻辑相关的市场
       for (const otherMarket of allMarkets) {
         if (otherMarket.id === market.id) continue;
-        
+
         const otherInfo = this.parseMarketQuestion(otherMarket.question);
         if (!otherInfo) continue;
 
         // 检查是否是嵌套条件（同一资产，不同阈值）
-        if (marketInfo.asset === otherInfo.asset && 
-            marketInfo.direction === otherInfo.direction &&
-            marketInfo.threshold !== otherInfo.threshold) {
-          
-          await this.checkNestedMarketArbitrage(market, otherMarket, marketInfo, otherInfo);
+        if (
+          marketInfo.asset === otherInfo.asset &&
+          marketInfo.direction === otherInfo.direction &&
+          marketInfo.threshold !== otherInfo.threshold
+        ) {
+          await this.checkNestedMarketArbitrage(
+            market,
+            otherMarket,
+            marketInfo,
+            otherInfo,
+          );
         }
 
         // 检查高相似度但价格差异大的市场
-        const similarity = this.calculateSimilarity(market.question, otherMarket.question);
+        const similarity = this.calculateSimilarity(
+          market.question,
+          otherMarket.question,
+        );
         if (similarity > 0.7 && similarity < 0.95) {
           await this.checkSimilarMarketArbitrage(market, otherMarket);
         }
@@ -285,7 +304,9 @@ export class ArbitrageDetector {
   /**
    * 解析市场问题提取关键信息
    */
-  private parseMarketQuestion(question: string): { asset: string; direction: string; threshold: number } | null {
+  private parseMarketQuestion(
+    question: string,
+  ): { asset: string; direction: string; threshold: number } | null {
     // 匹配模式: "Will BTC hit 100k", "BTC above 50000", "Bitcoin > 60k"
     const patterns = [
       /will\s+(\w+)\s+(hit|reach|above|below|>|<)\s+\$?([\d,.]+)k?/i,
@@ -297,10 +318,10 @@ export class ArbitrageDetector {
       if (match) {
         const asset = match[1].toUpperCase();
         const direction = match[2].toLowerCase();
-        let threshold = parseFloat(match[3].replace(/,/g, ''));
-        
+        let threshold = parseFloat(match[3].replace(/,/g, ""));
+
         // 处理 "100k" 这样的格式
-        if (question.toLowerCase().includes(match[3] + 'k')) {
+        if (question.toLowerCase().includes(match[3] + "k")) {
           threshold *= 1000;
         }
 
@@ -320,8 +341,12 @@ export class ArbitrageDetector {
     info1: { threshold: number },
     info2: { threshold: number },
   ): Promise<void> {
-    const prices1 = await this.marketDataService.getBestPrices(market1.tokens[0].tokenId);
-    const prices2 = await this.marketDataService.getBestPrices(market2.tokens[0].tokenId);
+    const prices1 = await this.marketDataService.getBestPrices(
+      market1.tokens[0].tokenId,
+    );
+    const prices2 = await this.marketDataService.getBestPrices(
+      market2.tokens[0].tokenId,
+    );
 
     if (!prices1 || !prices2) return;
 
@@ -329,22 +354,27 @@ export class ArbitrageDetector {
     const prob2 = (prices2.bid + prices2.ask) / 2;
 
     // 如果阈值更高的市场概率反而更高，存在逻辑矛盾
-    const lowerThresholdMarket = info1.threshold < info2.threshold ? market1 : market2;
-    const higherThresholdMarket = info1.threshold < info2.threshold ? market2 : market1;
-    const lowerThresholdProb = info1.threshold < info2.threshold ? prob1 : prob2;
-    const higherThresholdProb = info1.threshold < info2.threshold ? prob2 : prob1;
+    const lowerThresholdMarket =
+      info1.threshold < info2.threshold ? market1 : market2;
+    const higherThresholdMarket =
+      info1.threshold < info2.threshold ? market2 : market1;
+    const lowerThresholdProb =
+      info1.threshold < info2.threshold ? prob1 : prob2;
+    const higherThresholdProb =
+      info1.threshold < info2.threshold ? prob2 : prob1;
 
     // 高阈值概率不应超过低阈值概率
-    if (higherThresholdProb > lowerThresholdProb + 0.02) { // 2% 容忍度
+    if (higherThresholdProb > lowerThresholdProb + 0.02) {
+      // 2% 容忍度
       const profitGap = higherThresholdProb - lowerThresholdProb;
       const profitPercentage = profitGap * 100;
 
       if (profitPercentage >= this.minProfitThreshold) {
-        this.addOpportunity({
+        await this.addOpportunity({
           id: `crossmarket_nested_${market1.id}_${market2.id}_${Date.now()}`,
           strategy: ArbitrageStrategy.CROSS_MARKET,
           marketId: market1.id,
-          description: `嵌套市场套利\n🔗 ${lowerThresholdMarket.question.substring(0, 50)}... (${(lowerThresholdProb*100).toFixed(1)}%)\n🔗 ${higherThresholdMarket.question.substring(0, 50)}... (${(higherThresholdProb*100).toFixed(1)}%)\n💡 概率逻辑矛盾: 低阈值应≥高阈值`,
+          description: `嵌套市场套利\n🔗 ${lowerThresholdMarket.question.substring(0, 50)}... (${(lowerThresholdProb * 100).toFixed(1)}%)\n🔗 ${higherThresholdMarket.question.substring(0, 50)}... (${(higherThresholdProb * 100).toFixed(1)}%)\n💡 概率逻辑矛盾: 低阈值应≥高阈值`,
           expectedProfit: profitGap,
           profitPercentage,
           requiredCapital: 2, // 需要在两个市场各买入
@@ -359,9 +389,16 @@ export class ArbitrageDetector {
   /**
    * 检查相似市场套利
    */
-  private async checkSimilarMarketArbitrage(market1: Market, market2: Market): Promise<void> {
-    const prices1 = await this.marketDataService.getBestPrices(market1.tokens[0].tokenId);
-    const prices2 = await this.marketDataService.getBestPrices(market2.tokens[0].tokenId);
+  private async checkSimilarMarketArbitrage(
+    market1: Market,
+    market2: Market,
+  ): Promise<void> {
+    const prices1 = await this.marketDataService.getBestPrices(
+      market1.tokens[0].tokenId,
+    );
+    const prices2 = await this.marketDataService.getBestPrices(
+      market2.tokens[0].tokenId,
+    );
 
     if (!prices1 || !prices2) return;
 
@@ -370,12 +407,13 @@ export class ArbitrageDetector {
     const priceDiff = Math.abs(prob1 - prob2);
     const profitPercentage = priceDiff * 100;
 
-    if (profitPercentage >= this.minProfitThreshold * 2) { // 更保守的阈值
-      this.addOpportunity({
+    if (profitPercentage >= this.minProfitThreshold * 2) {
+      // 更保守的阈值
+      await this.addOpportunity({
         id: `crossmarket_similar_${market1.id}_${market2.id}_${Date.now()}`,
         strategy: ArbitrageStrategy.CROSS_MARKET,
         marketId: market1.id,
-        description: `相似市场套利\n🔗 ${market1.question.substring(0, 50)}... (${(prob1*100).toFixed(1)}%)\n🔗 ${market2.question.substring(0, 50)}... (${(prob2*100).toFixed(1)}%)\n💡 价格差异: ${(priceDiff*100).toFixed(1)}%`,
+        description: `相似市场套利\n🔗 ${market1.question.substring(0, 50)}... (${(prob1 * 100).toFixed(1)}%)\n🔗 ${market2.question.substring(0, 50)}... (${(prob2 * 100).toFixed(1)}%)\n💡 价格差异: ${(priceDiff * 100).toFixed(1)}%`,
         expectedProfit: priceDiff,
         profitPercentage,
         requiredCapital: 2,
@@ -421,18 +459,20 @@ export class ArbitrageDetector {
         const profitPercentage = (potentialProfit / midPrice) * 100;
 
         // 计算扣除费用后的净利润
-        const netProfitPercentage = profitPercentage - (this.TRADING_FEE_RATE * 2 * 100);
+        const netProfitPercentage =
+          profitPercentage - this.TRADING_FEE_RATE * 2 * 100;
 
         if (netProfitPercentage >= this.minProfitThreshold) {
           // 确定交易方向：价格高于均值则卖出预期回落，低于均值则买入预期回升
           const side = zScore > 0 ? OrderSide.SELL : OrderSide.BUY;
-          const directionDesc = zScore > 0 ? '📉 价格偏高，预期回落' : '📈 价格偏低，预期回升';
+          const directionDesc =
+            zScore > 0 ? "📉 价格偏高，预期回落" : "📈 价格偏低，预期回升";
 
-          this.addOpportunity({
+          await this.addOpportunity({
             id: `timebased_${market.id}_${Date.now()}`,
             strategy: ArbitrageStrategy.TIME_BASED,
             marketId: market.id,
-            description: `${market.question}\n${directionDesc}\n📊 当前: $${midPrice.toFixed(3)} | 均值: $${expectedReversion.toFixed(3)} | Z-score: ${zScore.toFixed(2)}\n📈 趋势: ${trend > 0 ? '上涨' : trend < 0 ? '下跌' : '平稳'}`,
+            description: `${market.question}\n${directionDesc}\n📊 当前: $${midPrice.toFixed(3)} | 均值: $${expectedReversion.toFixed(3)} | Z-score: ${zScore.toFixed(2)}\n📈 趋势: ${trend > 0 ? "上涨" : trend < 0 ? "下跌" : "平稳"}`,
             expectedProfit: potentialProfit,
             profitPercentage: netProfitPercentage,
             requiredCapital: midPrice,
@@ -463,7 +503,9 @@ export class ArbitrageDetector {
   /**
    * 添加套利机会
    */
-  private addOpportunity(opportunity: ArbitrageOpportunity): void {
+  private async addOpportunity(
+    opportunity: ArbitrageOpportunity,
+  ): Promise<void> {
     this.opportunities.push(opportunity);
 
     const riskEmoji = {
@@ -480,6 +522,10 @@ export class ArbitrageDetector {
         `   所需资金: $${opportunity.requiredCapital.toFixed(2)}\n` +
         `   风险等级: ${riskEmoji[opportunity.risk]} ${opportunity.risk}`,
     );
+
+    if (this.onOpportunityFoundCallback) {
+      await this.onOpportunityFoundCallback(opportunity);
+    }
   }
 
   /**

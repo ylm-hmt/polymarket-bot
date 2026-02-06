@@ -91,9 +91,10 @@ export class Logger {
    * 调试日志
    */
   public debug(message: string): void {
-    // 调试信息一般不显示在 Dashboard，除非非常重要，或者可以单独加个 debug 开关
-    // 这里为了 UI 干净，暂时不发给 dashboard，或者作为 info 发送但标记为 debug
-    // this.logger.debug(message);
+    this.logger.debug(message);
+    if (this.dashboard && (process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+      this.dashboard.log(`🔍 ${message}`, 'info');
+    }
   }
 
   /**

@@ -29,6 +29,24 @@ export class MarketDataService {
     this.initializeClient();
   }
 
+  private normalizeStringArray(value: any): string[] {
+    if (value == null) return [];
+    if (Array.isArray(value)) return value.map(v => String(v));
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return [];
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.map(v => String(v));
+      } catch {}
+      return trimmed
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
   /**
    * 初始化 CLOB 客户端
    */
@@ -37,7 +55,7 @@ export class MarketDataService {
       const wallet = new ethers.Wallet(this.privateKey);
 
       this.clobClient = new ClobClient(
-        "https://clob.polymarket.com",
+        this.config.getConfig().clobApiUrl,
         this.chainId,
         wallet,
       );
@@ -99,29 +117,27 @@ export class MarketDataService {
           ? data.markets
           : [];
 
+      let missingClobTokenIds = 0;
+
       const allMarkets: Market[] = rawMarkets.map((m: any) => {
-        // 解析 outcomes 和 prices
-        let outcomes: string[] = [];
-        let prices: string[] = [];
-        let clobTokenIds: string[] = [];
-        try {
-          outcomes = JSON.parse(m.outcomes || "[]");
-          prices = JSON.parse(m.outcomePrices || "[]");
-        } catch (e) {
-          outcomes = ["Yes", "No"];
-          prices = ["0.5", "0.5"];
-        }
-        try {
-          clobTokenIds = JSON.parse(m.clobTokenIds || "[]");
-        } catch (e) {
-          clobTokenIds = [];
+        const outcomes = this.normalizeStringArray(m.outcomes);
+        const pricesRaw = this.normalizeStringArray(m.outcomePrices);
+        const clobTokenIds = this.normalizeStringArray(m.clobTokenIds);
+
+        const normalizedOutcomes =
+          outcomes.length > 0 ? outcomes : ["Yes", "No"];
+        const normalizedPrices =
+          pricesRaw.length > 0 ? pricesRaw : ["0.5", "0.5"];
+
+        if (clobTokenIds.length === 0) {
+          missingClobTokenIds++;
         }
 
         // 构建 token 数据
-        const tokens = outcomes.map((outcome: string, i: number) => ({
+        const tokens = normalizedOutcomes.map((outcome: string, i: number) => ({
           tokenId: clobTokenIds[i] || "",
           outcome: outcome,
-          price: parseFloat(prices[i] || "0"),
+          price: parseFloat(normalizedPrices[i] || "0"),
           liquidity: parseFloat(m.liquidity || m.liquidityNum || "0"),
         }));
 
@@ -146,6 +162,11 @@ export class MarketDataService {
         .slice(0, MAX_MARKETS);
 
       this.logger.info(`获取到 ${selected.length} 个活跃市场`);
+      if (missingClobTokenIds > 0) {
+        this.logger.warn(
+          `市场数据缺少 clobTokenIds: ${missingClobTokenIds}/${rawMarkets.length}（将导致无法读取订单簿）`,
+        );
+      }
       return selected;
     } catch (error) {
       this.logger.error("获取市场数据失败", error as Error);
@@ -170,21 +191,13 @@ export class MarketDataService {
       }
 
       const m: any = await response.json();
-      let outcomes: string[] = [];
-      let prices: string[] = [];
-      let clobTokenIds: string[] = [];
-      try {
-        outcomes = JSON.parse(m.outcomes || "[]");
-        prices = JSON.parse(m.outcomePrices || "[]");
-      } catch (e) {
-        outcomes = ["Yes", "No"];
-        prices = ["0.5", "0.5"];
-      }
-      try {
-        clobTokenIds = JSON.parse(m.clobTokenIds || "[]");
-      } catch (e) {
-        clobTokenIds = [];
-      }
+      const outcomes = this.normalizeStringArray(m.outcomes);
+      const pricesRaw = this.normalizeStringArray(m.outcomePrices);
+      const clobTokenIds = this.normalizeStringArray(m.clobTokenIds);
+
+      const normalizedOutcomes =
+        outcomes.length > 0 ? outcomes : ["Yes", "No"];
+      const normalizedPrices = pricesRaw.length > 0 ? pricesRaw : ["0.5", "0.5"];
       return {
         id: m.condition_id || m.conditionId || m.id,
         question: m.question,
@@ -192,10 +205,10 @@ export class MarketDataService {
         endDate: new Date(m.end_date_iso || m.endDateIso || m.endDate),
         active: m.active,
         closed: m.closed,
-        tokens: outcomes.map((outcome: string, i: number) => ({
+        tokens: normalizedOutcomes.map((outcome: string, i: number) => ({
           tokenId: clobTokenIds[i] || "",
           outcome: outcome,
-          price: parseFloat(prices[i] || "0"),
+          price: parseFloat(normalizedPrices[i] || "0"),
           liquidity: parseFloat(m.liquidity || m.liquidityNum || "0"),
         })),
       };

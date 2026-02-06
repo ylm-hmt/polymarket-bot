@@ -88,6 +88,16 @@ class ArbitrageBot {
         this.dashboard.updateBalance({ ...balance, timestamp: Date.now() });
       }
 
+      // 进行 L2 API 认证（用于交易）
+      this.logger.info("正在进行交易认证...");
+      const authSuccess = await this.orderExecutor.authenticateForTrading();
+      if (!authSuccess) {
+        this.logger.warn("交易认证失败，机器人将以只读模式运行（仅监控，不交易）");
+        if (this.dashboard) {
+          this.dashboard.log("认证失败，只读模式", "warn");
+        }
+      }
+
       // 加载市场数据
       await this.loadMarkets();
 
@@ -144,12 +154,21 @@ class ArbitrageBot {
         break;
     }
 
+    const beforeLiquidityFilter = this.markets.length;
     // 过滤流动性不足的市场
     this.markets = this.markets.filter(m =>
       m.tokens.some(t => t.liquidity >= cfg.minLiquidity),
     );
+    const afterLiquidityFilter = this.markets.length;
 
-    this.logger.info(`已加载 ${this.markets.length} 个符合条件的市场`);
+    this.logger.info(
+      `已加载 ${afterLiquidityFilter} 个符合条件的市场（流动性过滤: ${beforeLiquidityFilter} → ${afterLiquidityFilter}, minLiquidity=$${cfg.minLiquidity}）`,
+    );
+    if (afterLiquidityFilter === 0) {
+      this.logger.warn(
+        "当前监控范围内没有任何可扫描市场：请检查 MONITOR_MODE / MONITOR_CATEGORIES / CUSTOM_MARKET_IDS / MIN_LIQUIDITY",
+      );
+    }
 
     if (this.dashboard) {
       this.dashboard.updateMarkets(this.markets);
@@ -165,6 +184,7 @@ class ArbitrageBot {
     const marketRefreshIntervalMs = 30 * 60 * 1000; // 每30分钟刷新一次市场
     let lastMarketRefresh = Date.now();
     let isScanning = false;
+    const runOnce = process.env.RUN_ONCE === "true";
 
     const scan = async () => {
       if (!this.isRunning) return;
@@ -226,6 +246,11 @@ class ArbitrageBot {
       } finally {
         isScanning = false;
       }
+
+      if (runOnce) {
+        this.stop();
+        process.exit(0);
+      }
     };
 
     // 立即执行一次
@@ -258,6 +283,23 @@ class ArbitrageBot {
           this.dashboard.log(`机会被拒绝: ${evaluation.reason}`, "warn");
         }
         return;
+      }
+
+      if (
+        evaluation.adjustedSize != null &&
+        evaluation.adjustedSize > 0 &&
+        Math.abs(evaluation.adjustedSize - opportunity.requiredCapital) > 1e-9
+      ) {
+        const scale =
+          opportunity.requiredCapital > 0
+            ? evaluation.adjustedSize / opportunity.requiredCapital
+            : 1;
+        opportunity.trades = opportunity.trades.map(t => ({
+          ...t,
+          amount: t.amount * scale,
+        }));
+        opportunity.expectedProfit = opportunity.expectedProfit * scale;
+        opportunity.requiredCapital = evaluation.adjustedSize;
       }
 
       this.logger.info(`正在执行套利交易: ${opportunity.id}`);

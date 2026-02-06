@@ -1,7 +1,11 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/diagnostics/scanOnce.ts',
+    'src/diagnostics/mockScan.ts'
+  ],
   format: ['esm'],
   target: 'node18',
   splitting: false,
